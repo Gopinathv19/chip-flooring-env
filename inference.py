@@ -10,8 +10,8 @@ from openai import OpenAI
 
 
 ROOT = Path(__file__).resolve().parent
-ENV_DIR = ROOT / "chip_flooring_env"
-SERVER_DIR = ENV_DIR / "server"
+ENV_DIR = ROOT
+SERVER_DIR = ROOT / "server"
 
 
 def load_env_file(path: Path) -> None:
