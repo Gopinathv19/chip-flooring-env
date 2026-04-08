@@ -25,30 +25,33 @@ def load_env_file(path: Path) -> None:
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip().strip("'").strip('"')
-        if key:
+        if key and key not in os.environ:
             os.environ[key] = value
 
 
 load_env_file(ROOT / ".env")
 
-CONFIGURED_API_BASE_URL = os.getenv("API_BASE_URL")
-LOCAL_API_BASE_URL = os.getenv("LOCAL_API_BASE_URL", CONFIGURED_API_BASE_URL or "http://127.0.0.1:1234/v1")
-API_BASE_URL = CONFIGURED_API_BASE_URL or "https://router.huggingface.co/v1"
-MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-API_KEY = os.getenv("API_KEY")
-USE_LOCAL = os.getenv("USE_LOCAL", "").strip().lower() in {"1", "true", "yes", "y", "on"} or API_BASE_URL.startswith(
-    ("http://127.0.0.1", "http://localhost", "https://127.0.0.1", "https://localhost")
-) or LOCAL_API_BASE_URL.startswith(("http://127.0.0.1", "http://localhost", "https://127.0.0.1", "https://localhost"))
-if USE_LOCAL:
-    API_BASE_URL = LOCAL_API_BASE_URL
-else:
-    API_KEY = os.getenv("HF_TOKEN") or API_KEY
-LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
-TASK_NAME = os.getenv("TASK_NAME", "hard").strip().lower() or "hard"
-BENCHMARK = os.getenv("BENCHMARK", f"chip_flooring_{TASK_NAME}")
-MAX_STEPS = int(os.getenv("MAX_STEPS", "100"))
-TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
-MAX_TOKENS = int(os.getenv("MAX_TOKENS", "120"))
+IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+API_BASE_URL = (
+    os.getenv("API_BASE_URL")
+    or os.getenv("LOCAL_API_BASE_URL")
+    or "https://router.huggingface.co/v1"
+)
+MODEL_NAME = os.getenv("MODEL_NAME") or "meta-llama/Llama-3.3-70B-Instruct"
+TASK_NAME = (
+    os.getenv("OPENENV_CHIP_FLOORING_TASK")
+    or os.getenv("TASK_NAME")
+    or "hard"
+).strip().lower() or "hard"
+BENCHMARK = (
+    os.getenv("OPENENV_CHIP_FLOORING_BENCHMARK")
+    or os.getenv("BENCHMARK")
+    or f"chip_flooring_{TASK_NAME}"
+)
+MAX_STEPS = int(os.getenv("MAX_STEPS") or "100")
+TEMPERATURE = float(os.getenv("TEMPERATURE") or "0.2")
+MAX_TOKENS = int(os.getenv("MAX_TOKENS") or "120")
 
 
 def load_module(module_name: str, path: Path):
@@ -320,15 +323,6 @@ def compute_score(env: ChipFlooringEnvironment, rewards: List[float]) -> float:
     return max(0.0, min(1.0, score))
 
 
-def compute_score(env: ChipFlooringEnvironment, rewards: List[float]) -> float:
-    block_count = max(1, len(env.state.blocks))
-    completion = len(env.state.placed_blocks) / block_count
-    hpwl_quality = 1.0 - min(1.0, float(env.state.current_hpwl) / max(1.0, block_count * 4.0))
-    reward_signal = sum(rewards) / max(1.0, float(len(rewards)))
-    score = (0.5 * completion) + (0.3 * hpwl_quality) + (0.2 * max(0.0, min(1.0, reward_signal)))
-    return max(0.0, min(1.0, score))
-
-
 def choose_fallback_action(
     env: ChipFlooringEnvironment,
     candidate_actions: List[Dict[str, Any]],
@@ -354,11 +348,17 @@ def choose_fallback_action(
     )
 
 
+def _is_local_api_base(url: str) -> bool:
+    return url.startswith(
+        ("http://127.0.0.1", "http://localhost", "https://127.0.0.1", "https://localhost")
+    )
+
+
 
 
 def main() -> None:
-    resolved_api_key = API_KEY or ("lm-studio" if USE_LOCAL else None)
-    client = OpenAI(base_url=API_BASE_URL, api_key=resolved_api_key) if resolved_api_key or USE_LOCAL else None
+    resolved_api_key = API_KEY or ("lm-studio" if _is_local_api_base(API_BASE_URL) else None)
+    client = OpenAI(base_url=API_BASE_URL, api_key=resolved_api_key) if resolved_api_key else None
     env = ChipFlooringEnvironment()
     rewards: List[float] = []
     total_reward = 0.0
@@ -368,7 +368,11 @@ def main() -> None:
     previous_failure=""
     recent_history: List[Dict[str, Any]] = []
 
-    log_start(task=TASK_NAME, env=BENCHMARK, model=f"{MODEL_NAME} ({'local' if USE_LOCAL else 'huggingface'})")
+    log_start(
+        task=TASK_NAME,
+        env=BENCHMARK,
+        model=f"{MODEL_NAME} ({'local' if _is_local_api_base(API_BASE_URL) else 'huggingface'})",
+    )
 
     try:
         obs = env.reset()
